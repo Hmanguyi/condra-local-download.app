@@ -1,0 +1,8 @@
+There a few basic things this system does.
+
+1 - reads your email and highlights important details to make th eprocess faster
+
+2 - you can writes notes for the ai to follow. 
+    Putting certain email it subject folders and accomplising tasks like writing a thank you or follow up email.
+
+3 - saves all the email in data base so you can ask about email using ai.
