@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OpenAI Chat")
-        self.resize(940, 680)
+        self.resize(1040, 720)
 
         preferences = load_preferences()
         self.messages: list[ChatMessage] = []
@@ -71,13 +71,52 @@ class MainWindow(QMainWindow):
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
         self.chat_area.setObjectName("chatArea")
+        self.chat_area.document().setDefaultStyleSheet(
+            """
+            body {
+                color: #1f2937;
+                font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+                font-size: 14px;
+                line-height: 1.45;
+            }
+            .message-row {
+                margin: 14px 0;
+            }
+            .speaker {
+                color: #6b7280;
+                font-size: 12px;
+                font-weight: 700;
+                margin-bottom: 5px;
+                text-transform: uppercase;
+            }
+            .bubble {
+                border-radius: 14px;
+                padding: 11px 13px;
+            }
+            .user {
+                background: #dbeafe;
+                border: 1px solid #bfdbfe;
+            }
+            .assistant {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+            }
+            .system {
+                color: #64748b;
+                font-size: 13px;
+                margin: 12px 0;
+            }
+            """
+        )
 
         self.input_box = EnterToSendTextEdit()
         self.input_box.setPlaceholderText("Message OpenAI...")
-        self.input_box.setFixedHeight(86)
+        self.input_box.setFixedHeight(96)
         self.input_box.send_requested.connect(self.send_message)
 
         self.send_button = QPushButton("Send")
+        self.send_button.setObjectName("sendButton")
+        self.send_button.setFixedWidth(96)
         self.send_button.clicked.connect(self.send_message)
 
         self.key_input = QLineEdit()
@@ -88,15 +127,18 @@ class MainWindow(QMainWindow):
         self.model_input = QLineEdit(preferences.get("model", DEFAULT_MODEL))
 
         save_button = QPushButton("Save Settings")
+        save_button.setObjectName("secondaryButton")
         save_button.clicked.connect(self.save_settings)
 
         clear_button = QPushButton("New Chat")
+        clear_button.setObjectName("subtleButton")
         clear_button.clicked.connect(self.clear_chat)
 
         root = QWidget()
+        root.setObjectName("root")
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(14, 14, 14, 14)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(18, 18, 18, 18)
+        root_layout.setSpacing(14)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.build_chat_panel())
@@ -113,39 +155,73 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("chatHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(3)
+
+        title = QLabel("OpenAI Chat")
+        title.setObjectName("appTitle")
+
+        subtitle = QLabel("A private desktop chat using your own API key")
+        subtitle.setObjectName("appSubtitle")
+
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        layout.addWidget(header)
 
         layout.addWidget(self.chat_area)
 
-        input_row = QHBoxLayout()
-        input_row.addWidget(self.input_box, 1)
-        input_row.addWidget(self.send_button)
-        layout.addLayout(input_row)
+        composer = QFrame()
+        composer.setObjectName("composer")
+        composer_layout = QHBoxLayout(composer)
+        composer_layout.setContentsMargins(10, 10, 10, 10)
+        composer_layout.setSpacing(10)
+
+        composer_layout.addWidget(self.input_box, 1)
+        composer_layout.addWidget(self.send_button)
+        layout.addWidget(composer)
         return panel
 
     def build_settings_panel(self, save_button: QPushButton, clear_button: QPushButton) -> QWidget:
         panel = QFrame()
         panel.setObjectName("settingsPanel")
-        panel.setMinimumWidth(260)
+        panel.setMinimumWidth(282)
         panel.setMaximumWidth(340)
 
         layout = QVBoxLayout(panel)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         title = QLabel("Settings")
         title.setObjectName("settingsTitle")
 
+        helper = QLabel("Your key stays local in macOS Keychain.")
+        helper.setObjectName("settingsHelper")
+        helper.setWordWrap(True)
+
         layout.addWidget(title)
-        layout.addWidget(QLabel("OpenAI API key"))
+        layout.addWidget(helper)
+        layout.addSpacing(8)
+        layout.addWidget(self.form_label("OpenAI API key"))
         layout.addWidget(self.key_input)
-        layout.addWidget(QLabel("Model"))
+        layout.addWidget(self.form_label("Model"))
         layout.addWidget(self.model_input)
+        layout.addSpacing(4)
         layout.addWidget(save_button)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
         layout.addWidget(clear_button)
         layout.addStretch(1)
 
         return panel
+
+    def form_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("formLabel")
+        return label
 
     def send_message(self) -> None:
         text = self.input_box.toPlainText().strip()
@@ -204,11 +280,17 @@ class MainWindow(QMainWindow):
 
     def append_message(self, speaker: str, text: str) -> None:
         escaped_text = self.escape(text).replace(chr(10), "<br>")
-        self.chat_area.append(f"<p><b>{speaker}</b></p><p>{escaped_text}</p>")
+        bubble_class = "user" if speaker == "You" else "assistant"
+        self.chat_area.append(
+            "<div class='message-row'>"
+            f"<div class='speaker'>{speaker}</div>"
+            f"<div class='bubble {bubble_class}'>{escaped_text}</div>"
+            "</div>"
+        )
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
 
     def append_system_message(self, text: str) -> None:
-        self.chat_area.append(f"<p class='system'><i>{self.escape(text)}</i></p>")
+        self.chat_area.append(f"<div class='system'>{self.escape(text)}</div>")
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
 
     def show_error(self, message: str) -> None:
@@ -227,41 +309,100 @@ class MainWindow(QMainWindow):
     def apply_styles(self) -> None:
         self.setStyleSheet(
             """
+            QMainWindow {
+                background: #eef2f7;
+            }
             QWidget {
+                color: #1f2937;
                 font-size: 14px;
             }
-            QTextEdit#chatArea {
-                background: #fbfbfc;
-                border: 1px solid #d7d7dc;
+            QWidget#root {
+                background: #eef2f7;
+            }
+            QFrame#chatHeader {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
                 border-radius: 8px;
-                padding: 12px;
+            }
+            QLabel#appTitle {
+                color: #111827;
+                font-size: 22px;
+                font-weight: 800;
+            }
+            QLabel#appSubtitle {
+                color: #6b7280;
+                font-size: 13px;
+            }
+            QTextEdit#chatArea {
+                background: #f8fafc;
+                border: 1px solid #d9e1ea;
+                border-radius: 8px;
+                padding: 16px;
+            }
+            QFrame#composer {
+                background: #ffffff;
+                border: 1px solid #d9e1ea;
+                border-radius: 8px;
             }
             QFrame#settingsPanel {
-                background: #f3f4f6;
-                border: 1px solid #d7d7dc;
+                background: #ffffff;
+                border: 1px solid #d9e1ea;
                 border-radius: 8px;
-                padding: 8px;
             }
             QLabel#settingsTitle {
-                font-size: 18px;
+                color: #111827;
+                font-size: 19px;
+                font-weight: 800;
+            }
+            QLabel#settingsHelper {
+                color: #6b7280;
+                font-size: 13px;
+            }
+            QLabel#formLabel {
+                color: #374151;
+                font-size: 12px;
                 font-weight: 700;
-                padding-bottom: 8px;
             }
             QLineEdit, QPlainTextEdit {
-                border: 1px solid #c9c9d1;
-                border-radius: 6px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
                 padding: 8px;
                 background: white;
+                selection-background-color: #bfdbfe;
+            }
+            QLineEdit:focus, QPlainTextEdit:focus {
+                border: 1px solid #2563eb;
             }
             QPushButton {
-                border-radius: 6px;
-                padding: 8px 12px;
-                background: #2463eb;
+                border: none;
+                border-radius: 8px;
+                padding: 9px 13px;
+                background: #2563eb;
                 color: white;
                 font-weight: 600;
             }
+            QPushButton:hover {
+                background: #1d4ed8;
+            }
             QPushButton:disabled {
-                background: #9aa7c4;
+                background: #94a3b8;
+            }
+            QPushButton#secondaryButton {
+                background: #0f766e;
+            }
+            QPushButton#secondaryButton:hover {
+                background: #0d665f;
+            }
+            QPushButton#subtleButton {
+                background: #e2e8f0;
+                color: #334155;
+            }
+            QPushButton#subtleButton:hover {
+                background: #cbd5e1;
+            }
+            QSplitter::handle {
+                background: transparent;
+                width: 8px;
             }
             """
         )
