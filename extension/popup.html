@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>OpenAI Chat</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 12px;
+        width: 320px;
+      }
+
+      textarea {
+        box-sizing: border-box;
+        height: 90px;
+        margin-bottom: 8px;
+        resize: vertical;
+        width: 100%;
+      }
+
+      button {
+        background: #2f7d5c;
+        border: 0;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+        padding: 8px 10px;
+      }
+
+      pre {
+        background: #f4f0e8;
+        border-radius: 6px;
+        padding: 10px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="message" placeholder="Ask the local companion app..."></textarea>
+    <button id="send">Send</button>
+    <pre id="response"></pre>
+    <script src="popup.js"></script>
+  </body>
+</html>

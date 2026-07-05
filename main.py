@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import time
+from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -70,6 +73,13 @@ class MainWindow(QMainWindow):
         self.starts_in_setup = not bool(self.api_key)
         self.messages: list[ChatMessage] = []
         self.worker: Optional[ChatWorker] = None
+        self.app_dir = Path(__file__).resolve().parent
+        self.app_worker_pid_file = self.app_dir / ".app.py.pid"
+        self.app_worker_log_file = self.app_dir / "app.log"
+        self.app_worker_status_labels: list[QLabel] = []
+        self.save_worker_pid_file = self.app_dir / ".saveApp.pid"
+        self.save_worker_log_file = self.app_dir / "saveApp.log"
+        self.save_worker_status_labels: list[QLabel] = []
 
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
@@ -143,11 +153,18 @@ class MainWindow(QMainWindow):
         clear_button.setObjectName("subtleButton")
         clear_button.clicked.connect(self.clear_chat)
 
+        self.app_worker_status = self.build_worker_status_label(self.app_worker_status_labels)
+        self.save_worker_status = self.build_worker_status_label(self.save_worker_status_labels)
+
+        refresh_worker_button = QPushButton("Refresh")
+        refresh_worker_button.setObjectName("subtleButton")
+        refresh_worker_button.clicked.connect(self.update_background_statuses)
+
         self.stack = QStackedWidget()
         self.stack.setObjectName("root")
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.build_settings_panel(save_button, clear_button))
+        splitter.addWidget(self.build_settings_panel(save_button, clear_button, refresh_worker_button))
         splitter.addWidget(self.build_chat_panel())
         splitter.setSizes([260, 860])
         splitter.setStretchFactor(0, 0)
@@ -163,6 +180,11 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.app_page)
         self.setCentralWidget(self.stack)
         self.apply_styles()
+        self.update_background_statuses()
+
+        self.save_worker_status_timer = QTimer(self)
+        self.save_worker_status_timer.timeout.connect(self.update_background_statuses)
+        self.save_worker_status_timer.start(5000)
 
         if self.api_key:
             self.show_chat()
@@ -210,7 +232,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(composer)
         return panel
 
-    def build_settings_panel(self, save_button: QPushButton, clear_button: QPushButton) -> QWidget:
+    def build_settings_panel(
+        self,
+        save_button: QPushButton,
+        clear_button: QPushButton,
+        refresh_worker_button: QPushButton,
+    ) -> QWidget:
         panel = QFrame()
         panel.setObjectName("settingsPanel")
         panel.setMinimumWidth(240)
@@ -227,10 +254,28 @@ class MainWindow(QMainWindow):
         helper.setObjectName("settingsHelper")
         helper.setWordWrap(True)
 
+        worker_panel = QFrame()
+        worker_panel.setObjectName("workerPanel")
+        worker_layout = QVBoxLayout(worker_panel)
+        worker_layout.setContentsMargins(10, 10, 10, 10)
+        worker_layout.setSpacing(8)
+
+        worker_title = QLabel("Background")
+        worker_title.setObjectName("workerTitle")
+
+        worker_layout.addWidget(worker_title)
+        worker_layout.addWidget(self.form_label("Web app"))
+        worker_layout.addWidget(self.app_worker_status)
+        worker_layout.addWidget(self.form_label("Email saver"))
+        worker_layout.addWidget(self.save_worker_status)
+        worker_layout.addWidget(refresh_worker_button)
+
         layout.addWidget(title)
         layout.addWidget(helper)
         layout.addSpacing(18)
         layout.addWidget(clear_button)
+        layout.addSpacing(18)
+        layout.addWidget(worker_panel)
         layout.addSpacing(18)
         layout.addWidget(self.form_label("Settings"))
         layout.addWidget(self.form_label("OpenAI API key"))
@@ -284,6 +329,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.setup_model_input)
         layout.addSpacing(8)
         layout.addWidget(continue_button)
+        layout.addSpacing(18)
+        layout.addWidget(self.form_label("Web app"))
+        layout.addWidget(self.build_worker_status_label(self.app_worker_status_labels))
+        layout.addWidget(self.form_label("Email saver"))
+        layout.addWidget(self.build_worker_status_label(self.save_worker_status_labels))
 
         row = QHBoxLayout()
         row.addStretch(1)
@@ -297,6 +347,13 @@ class MainWindow(QMainWindow):
     def form_label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("formLabel")
+        return label
+
+    def build_worker_status_label(self, labels: list[QLabel]) -> QLabel:
+        label = QLabel()
+        label.setObjectName("workerStatus")
+        label.setWordWrap(True)
+        labels.append(label)
         return label
 
     def send_message(self) -> None:
@@ -377,9 +434,74 @@ class MainWindow(QMainWindow):
 
     def show_chat(self) -> None:
         self.stack.setCurrentWidget(self.app_page)
+        self.update_background_statuses()
         if not self.chat_area.toPlainText().strip():
             self.append_system_message("Ready. Ask a question to start a new chat.")
         self.input_box.setFocus()
+
+    def update_background_statuses(self) -> None:
+        self.update_worker_status(
+            self.app_worker_pid_file,
+            self.app_worker_log_file,
+            self.app_worker_status_labels,
+            "No web app pid file yet.",
+        )
+        self.update_worker_status(
+            self.save_worker_pid_file,
+            self.save_worker_log_file,
+            self.save_worker_status_labels,
+            "No saver pid file yet.",
+        )
+
+    def update_worker_status(
+        self,
+        pid_file: Path,
+        log_file: Path,
+        labels: list[QLabel],
+        missing_pid_message: str,
+    ) -> None:
+        if not pid_file.exists():
+            self.set_worker_status(labels, f"Not running\n{missing_pid_message}", "stopped")
+            return
+
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            self.set_worker_status(labels, "Unknown\nCould not read worker pid.", "stopped")
+            return
+
+        running = self.is_process_running(pid)
+        log_hint = ""
+        if log_file.exists():
+            try:
+                age_seconds = max(0, int(time.time() - log_file.stat().st_mtime))
+                log_hint = f"\nLog updated {age_seconds}s ago"
+            except OSError:
+                log_hint = "\nLog exists"
+
+        if running:
+            self.set_worker_status(labels, f"Running\nPID {pid}{log_hint}", "running")
+        else:
+            self.set_worker_status(labels, f"Not running\nLast PID {pid}{log_hint}", "stopped")
+
+    def set_worker_status(self, labels: list[QLabel], text: str, state: str) -> None:
+        for label in labels:
+            label.setText(text)
+            label.setProperty("state", state)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+    @staticmethod
+    def is_process_running(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except ProcessLookupError:
+            return False
 
     def clear_chat(self) -> None:
         self.messages.clear()
@@ -482,6 +604,27 @@ class MainWindow(QMainWindow):
             QLabel#settingsHelper {
                 color: #b8ad9d;
                 font-size: 13px;
+            }
+            QFrame#workerPanel {
+                background: #343128;
+                border: 1px solid #464137;
+                border-radius: 8px;
+            }
+            QLabel#workerTitle {
+                color: #f8f2e8;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QLabel#workerStatus {
+                color: #d8d0c2;
+                font-size: 12px;
+                line-height: 1.35;
+            }
+            QLabel#workerStatus[state="running"] {
+                color: #bce8ca;
+            }
+            QLabel#workerStatus[state="stopped"] {
+                color: #f0c4b8;
             }
             QLabel#formLabel {
                 color: #c9bead;

@@ -41,6 +41,8 @@ This repository folder is named like a macOS app: `condra-local-download.app`. B
 
 After installing dependencies, you can double-click `condra-local-download.app`. The native launcher at `Contents/MacOS/condra-local-download` starts `main.py`. If dependencies are missing, it shows a dialog telling you what to install.
 
+The launcher also starts `app.py` and `saveApp.py` in the background. It records process ids in `.app.py.pid` and `.saveApp.pid` so repeated double-clicks do not create duplicate workers, and writes output to `app.log` and `saveApp.log`.
+
 If you edit `launcher.c`, rebuild that source-folder launcher with:
 
 ```bash

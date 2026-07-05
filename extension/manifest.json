@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "OpenAI Chat Companion Example",
+  "version": "1.0.0",
+  "description": "Example Chrome extension wiring for the local macOS OpenAI Chat companion app.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OpenAI Chat"
+  }
+}
