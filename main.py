@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QStackedWidget,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -62,9 +63,11 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OpenAI Chat")
-        self.resize(1040, 720)
+        self.resize(1120, 760)
 
         preferences = load_preferences()
+        self.api_key = load_api_key()
+        self.starts_in_setup = not bool(self.api_key)
         self.messages: list[ChatMessage] = []
         self.worker: Optional[ChatWorker] = None
 
@@ -74,7 +77,7 @@ class MainWindow(QMainWindow):
         self.chat_area.document().setDefaultStyleSheet(
             """
             body {
-                color: #1f2937;
+                color: #25231f;
                 font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
                 font-size: 14px;
                 line-height: 1.45;
@@ -83,7 +86,7 @@ class MainWindow(QMainWindow):
                 margin: 14px 0;
             }
             .speaker {
-                color: #6b7280;
+                color: #7b746a;
                 font-size: 12px;
                 font-weight: 700;
                 margin-bottom: 5px;
@@ -94,15 +97,15 @@ class MainWindow(QMainWindow):
                 padding: 11px 13px;
             }
             .user {
-                background: #dbeafe;
-                border: 1px solid #bfdbfe;
+                background: #dcebdd;
+                border: 1px solid #c1d8c4;
             }
             .assistant {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
+                background: #fffdf8;
+                border: 1px solid #ddd6c8;
             }
             .system {
-                color: #64748b;
+                color: #8a8175;
                 font-size: 13px;
                 margin: 12px 0;
             }
@@ -110,7 +113,7 @@ class MainWindow(QMainWindow):
         )
 
         self.input_box = EnterToSendTextEdit()
-        self.input_box.setPlaceholderText("Message OpenAI...")
+        self.input_box.setPlaceholderText("Ask anything...")
         self.input_box.setFixedHeight(96)
         self.input_box.send_requested.connect(self.send_message)
 
@@ -122,7 +125,13 @@ class MainWindow(QMainWindow):
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.Password)
         self.key_input.setPlaceholderText("sk-...")
-        self.key_input.setText(load_api_key())
+        self.key_input.setText(self.api_key)
+
+        self.setup_key_input = QLineEdit()
+        self.setup_key_input.setEchoMode(QLineEdit.Password)
+        self.setup_key_input.setPlaceholderText("sk-...")
+        self.setup_key_input.setText(self.api_key)
+        self.setup_key_input.returnPressed.connect(self.save_setup)
 
         self.model_input = QLineEdit(preferences.get("model", DEFAULT_MODEL))
 
@@ -134,22 +143,31 @@ class MainWindow(QMainWindow):
         clear_button.setObjectName("subtleButton")
         clear_button.clicked.connect(self.clear_chat)
 
-        root = QWidget()
-        root.setObjectName("root")
-        root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(18, 18, 18, 18)
-        root_layout.setSpacing(14)
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("root")
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.build_chat_panel())
         splitter.addWidget(self.build_settings_panel(save_button, clear_button))
-        splitter.setStretchFactor(0, 4)
+        splitter.addWidget(self.build_chat_panel())
+        splitter.setSizes([260, 860])
+        splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
-        root_layout.addWidget(splitter)
-        self.setCentralWidget(root)
+        self.setup_page = self.build_setup_page()
+        self.app_page = QWidget()
+        app_layout = QVBoxLayout(self.app_page)
+        app_layout.setContentsMargins(0, 0, 0, 0)
+        app_layout.addWidget(splitter)
+
+        self.stack.addWidget(self.setup_page)
+        self.stack.addWidget(self.app_page)
+        self.setCentralWidget(self.stack)
         self.apply_styles()
-        self.append_system_message("Ready. Paste your API key in Settings, then start chatting.")
+
+        if self.api_key:
+            self.show_chat()
+        else:
+            self.show_setup()
 
     def build_chat_panel(self) -> QWidget:
         panel = QWidget()
@@ -159,18 +177,24 @@ class MainWindow(QMainWindow):
 
         header = QFrame()
         header.setObjectName("chatHeader")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(16, 12, 16, 12)
-        header_layout.setSpacing(3)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(18, 14, 18, 14)
+        header_layout.setSpacing(10)
 
-        title = QLabel("OpenAI Chat")
+        title_block = QVBoxLayout()
+        title_block.setSpacing(3)
+
+        title = QLabel("Chat")
         title.setObjectName("appTitle")
 
-        subtitle = QLabel("A private desktop chat using your own API key")
-        subtitle.setObjectName("appSubtitle")
+        self.model_subtitle = QLabel(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
+        self.model_subtitle.setObjectName("appSubtitle")
 
-        header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
+        title_block.addWidget(title)
+        title_block.addWidget(self.model_subtitle)
+
+        header_layout.addLayout(title_block)
+        header_layout.addStretch(1)
         layout.addWidget(header)
 
         layout.addWidget(self.chat_area)
@@ -189,34 +213,86 @@ class MainWindow(QMainWindow):
     def build_settings_panel(self, save_button: QPushButton, clear_button: QPushButton) -> QWidget:
         panel = QFrame()
         panel.setObjectName("settingsPanel")
-        panel.setMinimumWidth(282)
-        panel.setMaximumWidth(340)
+        panel.setMinimumWidth(240)
+        panel.setMaximumWidth(300)
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
-        title = QLabel("Settings")
-        title.setObjectName("settingsTitle")
+        title = QLabel("OpenAI")
+        title.setObjectName("sidebarTitle")
 
-        helper = QLabel("Your key stays local in macOS Keychain.")
+        helper = QLabel("Chat with your API key.")
         helper.setObjectName("settingsHelper")
         helper.setWordWrap(True)
 
         layout.addWidget(title)
         layout.addWidget(helper)
-        layout.addSpacing(8)
+        layout.addSpacing(18)
+        layout.addWidget(clear_button)
+        layout.addSpacing(18)
+        layout.addWidget(self.form_label("Settings"))
         layout.addWidget(self.form_label("OpenAI API key"))
         layout.addWidget(self.key_input)
         layout.addWidget(self.form_label("Model"))
         layout.addWidget(self.model_input)
         layout.addSpacing(4)
         layout.addWidget(save_button)
-        layout.addSpacing(8)
-        layout.addWidget(clear_button)
         layout.addStretch(1)
 
         return panel
+
+    def build_setup_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("setupPage")
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(56, 56, 56, 56)
+        outer.setSpacing(0)
+        outer.addStretch(1)
+
+        panel = QFrame()
+        panel.setObjectName("setupPanel")
+        panel.setMaximumWidth(620)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(34, 34, 34, 34)
+        layout.setSpacing(14)
+
+        title = QLabel("Set up OpenAI Chat")
+        title.setObjectName("setupTitle")
+
+        subtitle = QLabel("Paste your API key once. It is stored locally in macOS Keychain.")
+        subtitle.setObjectName("setupSubtitle")
+        subtitle.setWordWrap(True)
+
+        model_label = self.form_label("Model")
+        self.setup_model_input = QLineEdit(self.model_input.text())
+        self.setup_model_input.returnPressed.connect(self.save_setup)
+
+        continue_button = QPushButton("Start Chatting")
+        continue_button.setObjectName("setupButton")
+        continue_button.clicked.connect(self.save_setup)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(14)
+        layout.addWidget(self.form_label("OpenAI API key"))
+        layout.addWidget(self.setup_key_input)
+        layout.addWidget(model_label)
+        layout.addWidget(self.setup_model_input)
+        layout.addSpacing(8)
+        layout.addWidget(continue_button)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(panel)
+        row.addStretch(1)
+
+        outer.addLayout(row)
+        outer.addStretch(1)
+        return page
 
     def form_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -228,9 +304,9 @@ class MainWindow(QMainWindow):
         if not text or self.worker is not None:
             return
 
-        api_key = self.key_input.text().strip()
-        if not api_key:
+        if not self.api_key:
             self.show_error("Missing OpenAI API key. Paste your key in Settings first.")
+            self.show_setup()
             return
 
         self.messages.append(ChatMessage(role="user", content=text))
@@ -239,7 +315,7 @@ class MainWindow(QMainWindow):
         self.set_waiting(True)
         self.append_system_message("Assistant is thinking...")
 
-        self.worker = ChatWorker(api_key, self.model_input.text(), self.messages.copy())
+        self.worker = ChatWorker(self.api_key, self.model_input.text(), self.messages.copy())
         self.worker.succeeded.connect(self.handle_response)
         self.worker.failed.connect(self.handle_error)
         self.worker.finished.connect(self.worker_finished)
@@ -267,11 +343,43 @@ class MainWindow(QMainWindow):
 
     def save_settings(self) -> None:
         try:
-            save_api_key(self.key_input.text())
+            self.api_key = self.key_input.text().strip()
+            self.setup_key_input.setText(self.api_key)
             save_preferences(self.model_input.text())
+            save_api_key(self.api_key)
+            self.model_subtitle.setText(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
             self.append_system_message("Settings saved.")
+            if self.api_key:
+                self.show_chat()
         except RuntimeError as exc:
             self.show_error(str(exc))
+
+    def save_setup(self) -> None:
+        api_key = self.setup_key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "OpenAI Chat", "Paste your OpenAI API key to continue.")
+            return
+
+        try:
+            self.api_key = api_key
+            self.key_input.setText(api_key)
+            self.model_input.setText(self.setup_model_input.text().strip() or DEFAULT_MODEL)
+            save_api_key(self.api_key)
+            save_preferences(self.model_input.text())
+            self.model_subtitle.setText(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
+            self.show_chat()
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "OpenAI Chat", str(exc))
+
+    def show_setup(self) -> None:
+        self.stack.setCurrentWidget(self.setup_page)
+        self.setup_key_input.setFocus()
+
+    def show_chat(self) -> None:
+        self.stack.setCurrentWidget(self.app_page)
+        if not self.chat_area.toPlainText().strip():
+            self.append_system_message("Ready. Ask a question to start a new chat.")
+        self.input_box.setFocus()
 
     def clear_chat(self) -> None:
         self.messages.clear()
@@ -310,99 +418,121 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow {
-                background: #eef2f7;
+                background: #f4f0e8;
             }
             QWidget {
-                color: #1f2937;
+                color: #25231f;
                 font-size: 14px;
             }
             QWidget#root {
-                background: #eef2f7;
+                background: #f4f0e8;
+            }
+            QWidget#setupPage {
+                background: #f4f0e8;
+            }
+            QFrame#setupPanel {
+                background: #fffdf8;
+                border: 1px solid #ddd6c8;
+                border-radius: 8px;
+            }
+            QLabel#setupTitle {
+                color: #1f1d19;
+                font-size: 30px;
+                font-weight: 800;
+            }
+            QLabel#setupSubtitle {
+                color: #756f64;
+                font-size: 15px;
             }
             QFrame#chatHeader {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
+                background: #fffdf8;
+                border: 1px solid #ddd6c8;
                 border-radius: 8px;
             }
             QLabel#appTitle {
-                color: #111827;
+                color: #1f1d19;
                 font-size: 22px;
                 font-weight: 800;
             }
             QLabel#appSubtitle {
-                color: #6b7280;
+                color: #756f64;
                 font-size: 13px;
             }
             QTextEdit#chatArea {
-                background: #f8fafc;
-                border: 1px solid #d9e1ea;
+                background: #fbf7ef;
+                border: 1px solid #ddd6c8;
                 border-radius: 8px;
                 padding: 16px;
             }
             QFrame#composer {
-                background: #ffffff;
-                border: 1px solid #d9e1ea;
+                background: #fffdf8;
+                border: 1px solid #ddd6c8;
                 border-radius: 8px;
             }
             QFrame#settingsPanel {
-                background: #ffffff;
-                border: 1px solid #d9e1ea;
-                border-radius: 8px;
+                background: #292721;
+                border: none;
+                border-radius: 0;
             }
-            QLabel#settingsTitle {
-                color: #111827;
-                font-size: 19px;
+            QLabel#sidebarTitle {
+                color: #f8f2e8;
+                font-size: 22px;
                 font-weight: 800;
             }
             QLabel#settingsHelper {
-                color: #6b7280;
+                color: #b8ad9d;
                 font-size: 13px;
             }
             QLabel#formLabel {
-                color: #374151;
+                color: #c9bead;
                 font-size: 12px;
                 font-weight: 700;
             }
             QLineEdit, QPlainTextEdit {
-                border: 1px solid #cbd5e1;
+                color: #25231f;
+                border: 1px solid #d4cabc;
                 border-radius: 8px;
-                padding: 8px;
-                background: white;
-                selection-background-color: #bfdbfe;
+                padding: 9px;
+                background: #fffdf8;
+                selection-background-color: #d8eadf;
             }
             QLineEdit:focus, QPlainTextEdit:focus {
-                border: 1px solid #2563eb;
+                border: 1px solid #2f7d5c;
             }
             QPushButton {
                 border: none;
                 border-radius: 8px;
-                padding: 9px 13px;
-                background: #2563eb;
+                padding: 10px 13px;
+                background: #2f7d5c;
                 color: white;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #1d4ed8;
+                background: #27694d;
             }
             QPushButton:disabled {
-                background: #94a3b8;
+                background: #a8a094;
             }
             QPushButton#secondaryButton {
-                background: #0f766e;
+                background: #3b8767;
             }
             QPushButton#secondaryButton:hover {
-                background: #0d665f;
+                background: #327257;
             }
             QPushButton#subtleButton {
-                background: #e2e8f0;
-                color: #334155;
+                background: #3a372f;
+                color: #f8f2e8;
             }
             QPushButton#subtleButton:hover {
-                background: #cbd5e1;
+                background: #474338;
+            }
+            QPushButton#setupButton {
+                font-size: 15px;
+                padding: 12px 14px;
             }
             QSplitter::handle {
                 background: transparent;
-                width: 8px;
+                width: 10px;
             }
             """
         )
@@ -413,7 +543,10 @@ def main() -> int:
     app.setApplicationName("OpenAI Chat")
 
     window = MainWindow()
-    window.show()
+    if window.starts_in_setup:
+        window.showMaximized()
+    else:
+        window.show()
 
     return app.exec()
 
