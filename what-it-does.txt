@@ -6,3 +6,6 @@ There a few basic things this system does.
     Putting certain email it subject folders and accomplising tasks like writing a thank you or follow up email.
 
 3 - saves all the email in data base so you can ask about email using ai.
+
+
+yo yo 
