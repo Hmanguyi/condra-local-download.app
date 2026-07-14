@@ -73,7 +73,20 @@ GitHub source-code ZIPs rename the top folder with the branch name, such as
 `condra-local-download.app-main`, so the folder is no longer a normal `.app`
 bundle.
 
-Build and package the real app instead:
+To make a downloadable app on GitHub, create and push a version tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions will build the app and attach this file to the GitHub Release:
+
+```text
+OpenAI Chat.app.zip
+```
+
+You can also build and package the real app locally:
 
 ```bash
 ./scripts/package-app.sh
@@ -85,8 +98,9 @@ That creates:
 release/OpenAI Chat.app.zip
 ```
 
-Upload `release/OpenAI Chat.app.zip` to a GitHub Release and have people
-download that file. After unzipping it, they will get `OpenAI Chat.app`.
+If you build locally instead of using the GitHub Action, upload
+`release/OpenAI Chat.app.zip` to a GitHub Release and have people download that
+file. After unzipping it, they will get `OpenAI Chat.app`.
 
 If macOS says the downloaded app is damaged or cannot be opened, that is
 Gatekeeper blocking an unsigned app from the internet. For personal testing,
