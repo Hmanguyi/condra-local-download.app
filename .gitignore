@@ -2,6 +2,10 @@
 .venv/
 __pycache__/
 .pycache/
+.pyinstaller-cache/
 build/
 dist/
+release/
 *.spec.bak
+*.log
+*.pid
