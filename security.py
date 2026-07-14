@@ -5,17 +5,16 @@ from __future__ import annotations
 import base64
 import json
 import os
+from pathlib import Path
 from typing import Any
 
-import keyring
 from cryptography.fernet import Fernet, InvalidToken
-from keyring.errors import KeyringError
 
 
-KEYRING_SERVICE = "CondraLocalDownload"
-KEYRING_USERNAME = "save_app_encryption_key"
 ENV_KEY = "SAVE_APP_ENCRYPTION_KEY"
 LEGACY_ENV_KEY = "CONDRA_ENCRYPTION_KEY"
+APP_NAME = "OpenAI Chat Mac"
+KEY_FILE = Path.home() / "Library" / "Application Support" / APP_NAME / "saveApp.key"
 PREFIX = "enc:v1:"
 
 
@@ -24,25 +23,14 @@ def _get_key() -> bytes:
     if env_value:
         return _normalize_key(env_value)
 
-    try:
-        stored = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
-        if stored:
-            return _normalize_key(stored)
+    if KEY_FILE.exists():
+        return _normalize_key(KEY_FILE.read_text(encoding="utf-8").strip())
 
-        generated = Fernet.generate_key().decode("ascii")
-        keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, generated)
-        return generated.encode("ascii")
-    except KeyringError:
-        fallback_path = os.path.join(os.getcwd(), ".saveApp.key")
-        if os.path.exists(fallback_path):
-            with open(fallback_path, "r", encoding="utf-8") as key_file:
-                return _normalize_key(key_file.read().strip())
-
-        generated = Fernet.generate_key().decode("ascii")
-        with open(fallback_path, "w", encoding="utf-8") as key_file:
-            key_file.write(generated)
-        os.chmod(fallback_path, 0o600)
-        return generated.encode("ascii")
+    generated = Fernet.generate_key().decode("ascii")
+    KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    KEY_FILE.write_text(generated, encoding="utf-8")
+    os.chmod(KEY_FILE, 0o600)
+    return generated.encode("ascii")
 
 
 def _normalize_key(value: str) -> bytes:

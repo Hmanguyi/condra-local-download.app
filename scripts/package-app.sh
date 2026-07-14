@@ -8,10 +8,16 @@ ZIP_PATH="${ZIP_DIR}/${APP_NAME}.zip"
 
 cd "$(dirname "$0")/.."
 
-if [[ ! -d "${APP_PATH}" ]]; then
-  echo "Building ${APP_NAME} with PyInstaller..."
-  pyinstaller OpenAIChat.spec
+export PYINSTALLER_CONFIG_DIR="${PWD}/.pyinstaller-cache"
+
+if [[ -x ".venv/bin/pyinstaller" ]]; then
+  PYINSTALLER=".venv/bin/pyinstaller"
+else
+  PYINSTALLER="pyinstaller"
 fi
+
+echo "Building ${APP_NAME} with PyInstaller..."
+"${PYINSTALLER}" --clean --noconfirm OpenAIChat.spec
 
 if [[ ! -x "${APP_PATH}/Contents/MacOS/OpenAI Chat" ]]; then
   chmod +x "${APP_PATH}/Contents/MacOS/OpenAI Chat"

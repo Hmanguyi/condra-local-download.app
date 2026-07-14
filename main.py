@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
         title = QLabel("Set up OpenAI Chat")
         title.setObjectName("setupTitle")
 
-        subtitle = QLabel("Paste your API key once. It is stored locally in macOS Keychain.")
+        subtitle = QLabel("Paste your API key once. It is stored locally on this Mac.")
         subtitle.setObjectName("setupSubtitle")
         subtitle.setWordWrap(True)
 

@@ -2,9 +2,6 @@
 
 import plistlib
 
-from PyInstaller.utils.hooks import collect_submodules
-
-
 block_cipher = None
 with open("Info.plist", "rb") as plist_file:
     info_plist = plistlib.load(plist_file)
@@ -14,7 +11,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=collect_submodules("keyring.backends"),
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

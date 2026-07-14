@@ -1,6 +1,6 @@
 # OpenAI Chat Mac
 
-A small macOS desktop chat app built with Python, PySide6, and the OpenAI API. It stores your API key locally with `keyring`, which uses macOS Keychain when available.
+A small macOS desktop chat app built with Python, PySide6, and the OpenAI API. It stores your API key locally in the app's Application Support folder.
 
 ## Files
 
@@ -118,7 +118,7 @@ You can also build without the spec file:
 pyinstaller --windowed --name "OpenAI Chat" --osx-bundle-identifier com.example.openaichat --add-data "Info.plist:." main.py
 ```
 
-The spec-file build is recommended because it includes `keyring` backend modules more reliably.
+The spec-file build is recommended because it keeps the macOS app build repeatable.
 
 ## How macOS Knows What To Run
 
@@ -145,7 +145,11 @@ PyInstaller creates that executable from `main.py` and copies the Python runtime
 
 ## API Key Safety
 
-The API key is not hard-coded in the source code. It is saved through the `keyring` package. On macOS, that normally means the key is stored in Keychain under the service name `OpenAIChatMac`.
+The API key is not hard-coded in the source code. It is saved in a local file that only the current macOS user can read:
+
+```text
+~/Library/Application Support/OpenAI Chat Mac/secrets.json
+```
 
 The app stores non-secret preferences, such as the model name, here:
 
