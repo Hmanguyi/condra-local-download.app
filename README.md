@@ -66,6 +66,38 @@ dist/OpenAI Chat.app
 
 You can double-click that app in Finder.
 
+## Share A Downloadable App
+
+Do not use GitHub's green **Code > Download ZIP** file as the app download.
+GitHub source-code ZIPs rename the top folder with the branch name, such as
+`condra-local-download.app-main`, so the folder is no longer a normal `.app`
+bundle.
+
+Build and package the real app instead:
+
+```bash
+./scripts/package-app.sh
+```
+
+That creates:
+
+```text
+release/OpenAI Chat.app.zip
+```
+
+Upload `release/OpenAI Chat.app.zip` to a GitHub Release and have people
+download that file. After unzipping it, they will get `OpenAI Chat.app`.
+
+If macOS says the downloaded app is damaged or cannot be opened, that is
+Gatekeeper blocking an unsigned app from the internet. For personal testing,
+Control-click the app and choose **Open**, or run:
+
+```bash
+xattr -dr com.apple.quarantine "OpenAI Chat.app"
+```
+
+For public distribution, sign and notarize the app with an Apple Developer ID.
+
 You can also build without the spec file:
 
 ```bash
