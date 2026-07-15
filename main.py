@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -24,7 +28,15 @@ from PySide6.QtWidgets import (
 )
 
 from openai_client import ChatMessage, OpenAIChatClient, user_friendly_error
-from settings import DEFAULT_MODEL, load_api_key, load_preferences, save_api_key, save_preferences
+from settings import (
+    DEFAULT_MODEL,
+    load_api_key,
+    load_chat_history,
+    load_preferences,
+    save_api_key,
+    save_chat_history,
+    save_preferences,
+)
 
 
 class EnterToSendTextEdit(QPlainTextEdit):
@@ -60,6 +72,10 @@ class ChatWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    @staticmethod
+    def new_chat_record() -> dict:
+        return {"id": uuid4().hex, "title": "New chat", "messages": []}
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OpenAI Chat")
@@ -68,8 +84,16 @@ class MainWindow(QMainWindow):
         preferences = load_preferences()
         self.api_key = load_api_key()
         self.starts_in_setup = not bool(self.api_key)
+        self.chats = load_chat_history()
+        if not self.chats:
+            self.chats = [self.new_chat_record()]
+        self.active_chat_id = str(self.chats[0]["id"])
         self.messages: list[ChatMessage] = []
         self.worker: Optional[ChatWorker] = None
+        self.loading_step = 0
+        self.loading_timer = QTimer(self)
+        self.loading_timer.setInterval(350)
+        self.loading_timer.timeout.connect(self.advance_loading_animation)
 
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
@@ -136,55 +160,87 @@ class MainWindow(QMainWindow):
         self.model_input = QLineEdit(preferences.get("model", DEFAULT_MODEL))
 
         save_button = QPushButton("Save Settings")
-        save_button.setObjectName("secondaryButton")
+        save_button.setObjectName("primaryButton")
         save_button.clicked.connect(self.save_settings)
 
         clear_button = QPushButton("New Chat")
-        clear_button.setObjectName("subtleButton")
+        clear_button.setObjectName("headerButton")
         clear_button.clicked.connect(self.clear_chat)
 
         self.stack = QStackedWidget()
         self.stack.setObjectName("root")
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.build_settings_panel(save_button, clear_button))
-        splitter.addWidget(self.build_chat_panel())
-        splitter.setSizes([260, 860])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-
         self.setup_page = self.build_setup_page()
-        self.app_page = QWidget()
-        app_layout = QVBoxLayout(self.app_page)
-        app_layout.setContentsMargins(0, 0, 0, 0)
-        app_layout.addWidget(splitter)
+        self.app_page = self.build_chat_panel(clear_button)
+        self.settings_page = self.build_settings_page(save_button)
 
+        # The settings screen replaces the old permanent sidebar. It behaves
+        # like a collapsible view: open it from the header and return to chat.
         self.stack.addWidget(self.setup_page)
         self.stack.addWidget(self.app_page)
+        self.stack.addWidget(self.settings_page)
         self.setCentralWidget(self.stack)
         self.apply_styles()
+        self.refresh_chat_list()
+        self.load_active_chat()
 
         if self.api_key:
             self.show_chat()
         else:
             self.show_setup()
 
-    def build_chat_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+    def build_chat_panel(self, clear_button: QPushButton) -> QWidget:
+        self.app_page = QWidget()
+        self.app_page.setObjectName("chatPage")
+        page_layout = QHBoxLayout(self.app_page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("chatSidebar")
+        self.sidebar.setMinimumWidth(220)
+        self.sidebar.setMaximumWidth(300)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(14, 18, 14, 16)
+        sidebar_layout.setSpacing(10)
+
+        brand = QLabel("OpenAI Chat")
+        brand.setObjectName("sidebarBrand")
+        sidebar_layout.addWidget(brand)
+        clear_button.setObjectName("newChatButton")
+        sidebar_layout.addWidget(clear_button)
+
+        chats_label = QLabel("YOUR CHATS")
+        chats_label.setObjectName("sidebarSection")
+        sidebar_layout.addWidget(chats_label)
+        self.chat_list = QListWidget()
+        self.chat_list.setObjectName("chatList")
+        self.chat_list.currentItemChanged.connect(self.select_chat)
+        sidebar_layout.addWidget(self.chat_list, 1)
+
+        settings_button = QPushButton("Settings")
+        settings_button.setObjectName("sidebarButton")
+        settings_button.clicked.connect(self.show_settings)
+        sidebar_layout.addWidget(settings_button)
+
+        chat_panel = QWidget()
+        chat_panel.setObjectName("conversationPanel")
+        app_layout = QVBoxLayout(chat_panel)
+        app_layout.setContentsMargins(28, 22, 28, 24)
+        app_layout.setSpacing(16)
 
         header = QFrame()
         header.setObjectName("chatHeader")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(18, 14, 18, 14)
-        header_layout.setSpacing(10)
+        header_layout.setContentsMargins(4, 0, 4, 0)
+        header_layout.setSpacing(12)
 
         title_block = QVBoxLayout()
         title_block.setSpacing(3)
 
-        title = QLabel("Chat")
+        hour = datetime.now().hour
+        greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+        title = QLabel(greeting)
         title.setObjectName("appTitle")
 
         self.model_subtitle = QLabel(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
@@ -195,9 +251,28 @@ class MainWindow(QMainWindow):
 
         header_layout.addLayout(title_block)
         header_layout.addStretch(1)
-        layout.addWidget(header)
+        self.sidebar_toggle = QPushButton("Hide chats")
+        self.sidebar_toggle.setObjectName("headerButton")
+        self.sidebar_toggle.clicked.connect(self.toggle_sidebar)
+        header_layout.addWidget(self.sidebar_toggle)
+        app_layout.addWidget(header)
 
-        layout.addWidget(self.chat_area)
+        app_layout.addWidget(self.chat_area, 1)
+
+        self.loading_frame = QFrame()
+        self.loading_frame.setObjectName("loadingFrame")
+        loading_layout = QHBoxLayout(self.loading_frame)
+        loading_layout.setContentsMargins(14, 7, 14, 7)
+        loading_layout.setSpacing(8)
+        self.loading_dot = QLabel("●")
+        self.loading_dot.setObjectName("loadingDot")
+        self.loading_label = QLabel("Thinking")
+        self.loading_label.setObjectName("loadingLabel")
+        loading_layout.addWidget(self.loading_dot)
+        loading_layout.addWidget(self.loading_label)
+        loading_layout.addStretch(1)
+        self.loading_frame.hide()
+        app_layout.addWidget(self.loading_frame)
 
         composer = QFrame()
         composer.setObjectName("composer")
@@ -207,41 +282,71 @@ class MainWindow(QMainWindow):
 
         composer_layout.addWidget(self.input_box, 1)
         composer_layout.addWidget(self.send_button)
-        layout.addWidget(composer)
-        return panel
+        app_layout.addWidget(composer)
 
-    def build_settings_panel(self, save_button: QPushButton, clear_button: QPushButton) -> QWidget:
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setObjectName("chatSplitter")
+        splitter.addWidget(self.sidebar)
+        splitter.addWidget(chat_panel)
+        splitter.setSizes([260, 860])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        page_layout.addWidget(splitter)
+        return self.app_page
+
+    def build_settings_page(self, save_button: QPushButton) -> QWidget:
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(32, 24, 32, 32)
+        outer.setSpacing(22)
+
+        top = QHBoxLayout()
+        back_button = QPushButton("Back to chat")
+        back_button.setObjectName("headerButton")
+        back_button.clicked.connect(self.show_chat)
+        top.addWidget(back_button)
+        top.addStretch(1)
+        outer.addLayout(top)
+
         panel = QFrame()
-        panel.setObjectName("settingsPanel")
-        panel.setMinimumWidth(240)
-        panel.setMaximumWidth(300)
-
+        panel.setObjectName("settingsCard")
+        panel.setMaximumWidth(680)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setContentsMargins(34, 32, 34, 34)
         layout.setSpacing(12)
 
-        title = QLabel("OpenAI")
-        title.setObjectName("sidebarTitle")
-
-        helper = QLabel("Chat with your API key.")
+        title = QLabel("Settings")
+        title.setObjectName("settingsTitle")
+        helper = QLabel("Manage the connection used for your conversations. Your API key stays on this Mac.")
         helper.setObjectName("settingsHelper")
         helper.setWordWrap(True)
 
         layout.addWidget(title)
         layout.addWidget(helper)
-        layout.addSpacing(18)
-        layout.addWidget(clear_button)
-        layout.addSpacing(18)
-        layout.addWidget(self.form_label("Settings"))
+        layout.addSpacing(16)
         layout.addWidget(self.form_label("OpenAI API key"))
         layout.addWidget(self.key_input)
+        key_help = QLabel("Stored securely in your local user settings and never displayed in full.")
+        key_help.setObjectName("fieldHelp")
+        key_help.setWordWrap(True)
+        layout.addWidget(key_help)
+        layout.addSpacing(8)
         layout.addWidget(self.form_label("Model"))
         layout.addWidget(self.model_input)
-        layout.addSpacing(4)
+        model_help = QLabel("Choose the OpenAI model used for new messages.")
+        model_help.setObjectName("fieldHelp")
+        layout.addWidget(model_help)
+        layout.addSpacing(12)
         layout.addWidget(save_button)
-        layout.addStretch(1)
 
-        return panel
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(panel)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
+        return page
 
     def build_setup_page(self) -> QWidget:
         page = QWidget()
@@ -310,10 +415,16 @@ class MainWindow(QMainWindow):
             return
 
         self.messages.append(ChatMessage(role="user", content=text))
+        chat = self.active_chat()
+        if chat:
+            chat["messages"] = self.serialized_messages()
+            if str(chat.get("title") or "") == "New chat":
+                chat["title"] = self.chat_title(text)
+            self.persist_chats()
+            self.refresh_chat_list()
         self.append_message("You", text)
         self.input_box.clear()
         self.set_waiting(True)
-        self.append_system_message("Assistant is thinking...")
 
         self.worker = ChatWorker(self.api_key, self.model_input.text(), self.messages.copy())
         self.worker.succeeded.connect(self.handle_response)
@@ -324,19 +435,44 @@ class MainWindow(QMainWindow):
 
     def handle_response(self, text: str) -> None:
         self.messages.append(ChatMessage(role="assistant", content=text))
+        chat = self.active_chat()
+        if chat:
+            chat["messages"] = self.serialized_messages()
+            self.persist_chats()
         self.append_message("Assistant", text)
         self.set_waiting(False)
 
     def handle_error(self, message: str) -> None:
         self.messages.pop()
+        chat = self.active_chat()
+        if chat:
+            chat["messages"] = self.serialized_messages()
+            self.persist_chats()
         self.append_system_message(message)
         self.set_waiting(False)
 
     def set_waiting(self, waiting: bool) -> None:
         self.send_button.setEnabled(not waiting)
         self.input_box.setEnabled(not waiting)
+        self.chat_list.setEnabled(not waiting)
+        self.loading_frame.setVisible(waiting)
+        if waiting:
+            self.loading_step = 0
+            self.advance_loading_animation()
+            self.loading_timer.start()
+        else:
+            self.loading_timer.stop()
+            self.loading_label.setText("Thinking")
         if not waiting:
             self.input_box.setFocus()
+
+    def advance_loading_animation(self) -> None:
+        dots = "·" * (self.loading_step % 4)
+        self.loading_label.setText(f"Thinking {dots}".rstrip())
+        self.loading_dot.setStyleSheet(
+            "color: #356fd6;" if self.loading_step % 2 == 0 else "color: #8fb0ec;"
+        )
+        self.loading_step += 1
 
     def worker_finished(self) -> None:
         self.worker = None
@@ -381,10 +517,88 @@ class MainWindow(QMainWindow):
             self.append_system_message("Ready. Ask a question to start a new chat.")
         self.input_box.setFocus()
 
+    def show_settings(self) -> None:
+        self.key_input.setText(self.api_key)
+        self.stack.setCurrentWidget(self.settings_page)
+        self.key_input.setFocus()
+
     def clear_chat(self) -> None:
-        self.messages.clear()
+        chat = self.new_chat_record()
+        self.chats.insert(0, chat)
+        self.active_chat_id = str(chat["id"])
+        self.messages = []
+        self.persist_chats()
+        self.refresh_chat_list()
+        self.render_active_chat()
+        self.input_box.setFocus()
+
+    def active_chat(self) -> Optional[dict]:
+        return next(
+            (chat for chat in self.chats if str(chat.get("id")) == self.active_chat_id),
+            None,
+        )
+
+    def serialized_messages(self) -> list[dict[str, str]]:
+        return [{"role": message.role, "content": message.content} for message in self.messages]
+
+    @staticmethod
+    def chat_title(text: str) -> str:
+        clean = " ".join(str(text or "").split())
+        return clean if len(clean) <= 38 else clean[:38].rstrip() + "…"
+
+    def persist_chats(self) -> None:
+        try:
+            save_chat_history(self.chats)
+        except RuntimeError as exc:
+            self.append_system_message(str(exc))
+
+    def refresh_chat_list(self) -> None:
+        self.chat_list.blockSignals(True)
+        self.chat_list.clear()
+        active_item = None
+        for chat in self.chats:
+            item = QListWidgetItem(str(chat.get("title") or "New chat"))
+            item.setData(Qt.UserRole, str(chat.get("id")))
+            item.setToolTip(str(chat.get("title") or "New chat"))
+            self.chat_list.addItem(item)
+            if str(chat.get("id")) == self.active_chat_id:
+                active_item = item
+        if active_item:
+            self.chat_list.setCurrentItem(active_item)
+        self.chat_list.blockSignals(False)
+
+    def select_chat(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:
+        del previous
+        if current is None or self.worker is not None:
+            return
+        chat_id = str(current.data(Qt.UserRole) or "")
+        if chat_id and chat_id != self.active_chat_id:
+            self.active_chat_id = chat_id
+            self.load_active_chat()
+
+    def load_active_chat(self) -> None:
+        chat = self.active_chat()
+        raw_messages = chat.get("messages", []) if chat else []
+        self.messages = [
+            ChatMessage(role=str(message.get("role") or "user"), content=str(message.get("content") or ""))
+            for message in raw_messages
+            if isinstance(message, dict) and message.get("content")
+        ]
+        self.render_active_chat()
+
+    def render_active_chat(self) -> None:
         self.chat_area.clear()
-        self.append_system_message("New chat started.")
+        if not self.messages:
+            self.append_system_message("What can I help you with?")
+            return
+        for message in self.messages:
+            speaker = "You" if message.role == "user" else "Assistant"
+            self.append_message(speaker, message.content)
+
+    def toggle_sidebar(self) -> None:
+        visible = not self.sidebar.isHidden()
+        self.sidebar.setVisible(not visible)
+        self.sidebar_toggle.setText("Show chats" if visible else "Hide chats")
 
     def append_message(self, speaker: str, text: str) -> None:
         escaped_text = self.escape(text).replace(chr(10), "<br>")
@@ -418,121 +632,193 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow {
-                background: #f4f0e8;
+                background: #f6f7f9;
             }
             QWidget {
-                color: #25231f;
+                color: #20242a;
                 font-size: 14px;
             }
             QWidget#root {
-                background: #f4f0e8;
+                background: #f6f7f9;
             }
-            QWidget#setupPage {
-                background: #f4f0e8;
+            QWidget#setupPage, QWidget#chatPage, QWidget#settingsPage {
+                background: #f6f7f9;
+            }
+            QWidget#conversationPanel {
+                background: #f6f7f9;
+            }
+            QFrame#chatSidebar {
+                background: #17191d;
+                border: none;
+            }
+            QLabel#sidebarBrand {
+                color: #f5f6f7;
+                font-size: 18px;
+                font-weight: 800;
+                padding: 4px 5px 10px 5px;
+            }
+            QLabel#sidebarSection {
+                color: #8f96a1;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 12px 6px 2px 6px;
+            }
+            QListWidget#chatList {
+                background: transparent;
+                color: #dfe2e6;
+                border: none;
+                outline: none;
+                padding: 0;
+            }
+            QListWidget#chatList::item {
+                border-radius: 8px;
+                padding: 10px 9px;
+                margin: 1px 0;
+            }
+            QListWidget#chatList::item:hover {
+                background: #282b31;
+            }
+            QListWidget#chatList::item:selected {
+                background: #343840;
+                color: #ffffff;
             }
             QFrame#setupPanel {
-                background: #fffdf8;
-                border: 1px solid #ddd6c8;
-                border-radius: 8px;
+                background: #ffffff;
+                border: 1px solid #e2e5e9;
+                border-radius: 16px;
             }
             QLabel#setupTitle {
-                color: #1f1d19;
+                color: #171a1f;
                 font-size: 30px;
                 font-weight: 800;
             }
             QLabel#setupSubtitle {
-                color: #756f64;
+                color: #69717d;
                 font-size: 15px;
             }
             QFrame#chatHeader {
-                background: #fffdf8;
-                border: 1px solid #ddd6c8;
-                border-radius: 8px;
+                background: transparent;
+                border: none;
             }
             QLabel#appTitle {
-                color: #1f1d19;
-                font-size: 22px;
+                color: #171a1f;
+                font-size: 26px;
                 font-weight: 800;
             }
             QLabel#appSubtitle {
-                color: #756f64;
+                color: #747d89;
                 font-size: 13px;
             }
             QTextEdit#chatArea {
-                background: #fbf7ef;
-                border: 1px solid #ddd6c8;
-                border-radius: 8px;
-                padding: 16px;
+                background: #ffffff;
+                border: 1px solid #e2e5e9;
+                border-radius: 16px;
+                padding: 20px;
+            }
+            QFrame#loadingFrame {
+                background: #edf3ff;
+                border: 1px solid #d9e6fb;
+                border-radius: 10px;
+            }
+            QLabel#loadingDot {
+                color: #356fd6;
+                font-size: 10px;
+            }
+            QLabel#loadingLabel {
+                color: #536174;
+                font-size: 13px;
+                font-weight: 600;
             }
             QFrame#composer {
-                background: #fffdf8;
-                border: 1px solid #ddd6c8;
-                border-radius: 8px;
+                background: #ffffff;
+                border: 1px solid #dfe3e8;
+                border-radius: 14px;
             }
-            QFrame#settingsPanel {
-                background: #292721;
-                border: none;
-                border-radius: 0;
+            QFrame#settingsCard {
+                background: #ffffff;
+                border: 1px solid #e2e5e9;
+                border-radius: 16px;
             }
-            QLabel#sidebarTitle {
-                color: #f8f2e8;
-                font-size: 22px;
+            QLabel#settingsTitle {
+                color: #171a1f;
+                font-size: 28px;
                 font-weight: 800;
             }
             QLabel#settingsHelper {
-                color: #b8ad9d;
-                font-size: 13px;
+                color: #69717d;
+                font-size: 14px;
+            }
+            QLabel#fieldHelp {
+                color: #89919c;
+                font-size: 12px;
             }
             QLabel#formLabel {
-                color: #c9bead;
+                color: #414852;
                 font-size: 12px;
                 font-weight: 700;
             }
             QLineEdit, QPlainTextEdit {
-                color: #25231f;
-                border: 1px solid #d4cabc;
-                border-radius: 8px;
-                padding: 9px;
-                background: #fffdf8;
-                selection-background-color: #d8eadf;
+                color: #20242a;
+                border: 1px solid #d7dce2;
+                border-radius: 10px;
+                padding: 10px;
+                background: #ffffff;
+                selection-background-color: #d9e8ff;
             }
             QLineEdit:focus, QPlainTextEdit:focus {
-                border: 1px solid #2f7d5c;
+                border: 1px solid #356fd6;
             }
             QPushButton {
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 padding: 10px 13px;
-                background: #2f7d5c;
+                background: #356fd6;
                 color: white;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #27694d;
+                background: #2d61bd;
             }
             QPushButton:disabled {
-                background: #a8a094;
+                background: #aeb6c2;
             }
-            QPushButton#secondaryButton {
-                background: #3b8767;
+            QPushButton#primaryButton {
+                padding: 12px 16px;
             }
-            QPushButton#secondaryButton:hover {
-                background: #327257;
+            QPushButton#headerButton {
+                background: #ffffff;
+                color: #3e4651;
+                border: 1px solid #dfe3e8;
             }
-            QPushButton#subtleButton {
-                background: #3a372f;
-                color: #f8f2e8;
+            QPushButton#headerButton:hover {
+                background: #eef2f7;
+                border: 1px solid #ccd3dc;
             }
-            QPushButton#subtleButton:hover {
-                background: #474338;
+            QPushButton#newChatButton {
+                background: #ffffff;
+                color: #20242a;
+                text-align: left;
+                padding: 11px 12px;
+            }
+            QPushButton#newChatButton:hover {
+                background: #e8ebef;
+            }
+            QPushButton#sidebarButton {
+                background: transparent;
+                color: #dfe2e6;
+                text-align: left;
+                padding: 10px 9px;
+            }
+            QPushButton#sidebarButton:hover {
+                background: #282b31;
+            }
+            QSplitter#chatSplitter::handle {
+                background: #e2e5e9;
+                width: 1px;
             }
             QPushButton#setupButton {
                 font-size: 15px;
                 padding: 12px 14px;
-            }
-            QSplitter::handle {
-                background: transparent;
-                width: 10px;
             }
             """
         )

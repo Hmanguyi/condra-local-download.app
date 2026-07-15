@@ -17,6 +17,7 @@ APP_NAME = "OpenAI Chat Mac"
 SETTINGS_DIR = Path.home() / "Library" / "Application Support" / APP_NAME
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 SECRETS_FILE = SETTINGS_DIR / "secrets.json"
+CHAT_HISTORY_FILE = SETTINGS_DIR / "chat_history.json"
 DEFAULT_MODEL = "gpt-4.1-mini"
 
 
@@ -69,3 +70,29 @@ def save_preferences(model: str) -> None:
         json.dumps({"model": model.strip() or DEFAULT_MODEL}, indent=2),
         encoding="utf-8",
     )
+
+
+def load_chat_history() -> list[dict[str, Any]]:
+    """Load locally saved conversations, ignoring malformed entries."""
+
+    try:
+        data = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [chat for chat in data if isinstance(chat, dict) and chat.get("id")]
+
+
+def save_chat_history(chats: list[dict[str, Any]]) -> None:
+    """Persist the conversation list to local Application Support."""
+
+    try:
+        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+        CHAT_HISTORY_FILE.write_text(
+            json.dumps(chats, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.chmod(CHAT_HISTORY_FILE, 0o600)
+    except OSError as exc:
+        raise RuntimeError("Could not save chat history to local app storage.") from exc
