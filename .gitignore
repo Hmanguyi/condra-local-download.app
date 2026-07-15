@@ -9,3 +9,6 @@ release/
 *.spec.bak
 *.log
 *.pid
+instance/*.sqlite3
+instance/*.sqlite3-shm
+instance/*.sqlite3-wal

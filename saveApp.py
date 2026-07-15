@@ -31,6 +31,7 @@ from security import (
     encrypt_json_text,
     encrypt_text,
 )
+from local_storage import request as local_storage_request, vector_match as local_vector_match
 
 OLLAMA_CHAT_URL = os.environ.get("OLLAMA_CHAT_URL", "http://127.0.0.1:11434/api/chat")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
@@ -229,7 +230,8 @@ def get_supabase_key() -> str:
 
 
 def supabase_enabled() -> bool:
-    return bool(get_supabase_url() and get_supabase_key())
+    # Kept as a compatibility name for existing feature checks. Data is local.
+    return True
 
 
 SUPABASE_ENCRYPTED_FIELDS = {
@@ -304,85 +306,19 @@ def _decrypt_supabase_result(table: str, result):
 
 
 def supabase_request(method: str, table: str, query_params=None, body=None, prefer: str = ""):
-    if not supabase_enabled():
-        raise RuntimeError("Supabase not configured")
-    key = get_supabase_key()
-    if key.startswith("sb_publishable_"):
-        raise RuntimeError("Supabase key must be a service_role key for backend read/write.")
-
-    params = query_params or {}
-    qs = urllib.parse.urlencode(params, doseq=True)
-    url = f"{get_supabase_url()}/rest/v1/{table}"
-    if qs:
-        url = f"{url}?{qs}"
-
-    headers = {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-    }
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(_encrypt_supabase_body(table, body), ensure_ascii=False).encode("utf-8")
-    if prefer:
-        headers["Prefer"] = prefer
-
-    req = urllib.request.Request(url=url, data=data, method=method.upper(), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            if not raw.strip():
-                return None
-            try:
-                return _decrypt_supabase_result(table, json.loads(raw))
-            except Exception:
-                return raw
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(f"Supabase {table} {method.upper()} failed: HTTP {e.code} {detail}") from e
+    result = local_storage_request(
+        method,
+        table,
+        query_params=query_params,
+        body=_encrypt_supabase_body(table, body) if body is not None else None,
+        prefer=prefer,
+    )
+    return _decrypt_supabase_result(table, result)
 
 
 def supabase_rpc(function_name: str, payload: dict):
-    if not supabase_enabled():
-        raise RuntimeError("Supabase not configured")
-    key = get_supabase_key()
-    if key.startswith("sb_publishable_"):
-        raise RuntimeError("Supabase key must be a service_role key for backend read/write.")
-
-    url = f"{get_supabase_url()}/rest/v1/rpc/{function_name}"
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url=url,
-        data=data,
-        method="POST",
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            if not raw.strip():
-                return []
-            try:
-                parsed = json.loads(raw)
-                return _decrypt_supabase_result("email_embeddings", parsed) if isinstance(parsed, list) else []
-            except Exception:
-                return []
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(f"Supabase RPC {function_name} failed: HTTP {e.code} {detail}") from e
+    del function_name
+    return _decrypt_supabase_result("email_embeddings", local_vector_match(payload))
 
 
 def supabase_vectors_enabled() -> bool:
@@ -1120,7 +1056,7 @@ def upsert_email_to_supabase(user_email: str, msg_id: str, sender: str, text: st
         "raw_chunk": raw_chunk,
         "raw_sha256": raw_sha,
     }
-    print(f"[{user_email}] Supabase save fields for {subject}: bullets={bullet_points}, excerpts={excerpts}")
+    print(f"[{user_email}] Local save fields for {subject}: bullets={bullet_points}, excerpts={excerpts}")
     if existing_row:
         supabase_request(
             "PATCH",
@@ -1266,7 +1202,7 @@ def repair_missing_objective_completions_for_user(user_email: str, limit: int = 
 
 
 def get_stored_ids(user_email: str) -> set:
-    """Return the per-user processed-ID set from Supabase."""
+    """Return the per-user processed-ID set from local storage."""
     if user_email not in user_stored_ids:
         rows = supabase_request(
             "GET",
@@ -1311,7 +1247,7 @@ def ensure_user_registered(user_email: str):
         query_params={"on_conflict": "email"},
         body=[{
             "email": email,
-            "folder_path": "supabase",
+            "folder_path": "local",
             "migrated_at": now_iso,
         }],
         prefer="resolution=merge-duplicates,return=minimal",
@@ -1341,7 +1277,7 @@ def save_user_credentials(user_email: str, creds: Credentials):
         query_params={"on_conflict": "email"},
         body=[{
             "email": email,
-            "folder_path": "supabase",
+            "folder_path": "local",
             "migrated_at": now_iso,
             "google_token_json": creds.to_json(),
             "google_token_updated_at": now_iso,
@@ -1630,26 +1566,26 @@ attachments:
         print_summary_bullets_or_error(user_email, subject, summary_text)
 
         try:
-            print(f"[{user_email}] Backing up summary to Supabase for: {subject} ({msg_id})")
+            print(f"[{user_email}] Saving summary locally for: {subject} ({msg_id})")
             upserted = upsert_email_to_supabase(user_email, msg_id, sen, text, attachment, summary_text)
             verified = verify_email_summary_backed_up(user_email, msg_id)
             if not verified:
-                print(f"[{user_email}] Supabase backup ERROR for {subject}: row was not found after save")
+                print(f"[{user_email}] Local save ERROR for {subject}: row was not found after save")
             else:
                 saved_bullets = verified.get("bullet_points_json")
                 saved_excerpts = verified.get("excerpts_json")
                 if saved_bullets:
                     print(
-                        f"[{user_email}] Supabase backup OK for {subject}: "
+                        f"[{user_email}] Local save OK for {subject}: "
                         f"bullet_points_json={saved_bullets}, excerpts_json={saved_excerpts}"
                     )
                 else:
                     print(
-                        f"[{user_email}] Supabase backup WARNING for {subject}: "
+                        f"[{user_email}] Local save WARNING for {subject}: "
                         f"row exists but bullet_points_json is empty. raw_chunk has backup arrays."
                     )
         except Exception as e:
-            print(f"[{user_email}] Supabase backup ERROR for {subject}: {e}")
+            print(f"[{user_email}] Local save ERROR for {subject}: {e}")
             raise
         objective_id = str(_parse_summary_fields(summary_text or "").get("objective_id", "") or "").strip()
         if objective_id and objective_id.lower() != "none":
@@ -1669,7 +1605,7 @@ attachments:
                     chunk_text=str((upserted or {}).get("raw_chunk") or "").strip() or chunk_text,
                 )
             except Exception as e:
-                print(f"[{user_email}] Supabase vector upsert failed: {e}")
+                print(f"[{user_email}] Local vector upsert failed: {e}")
 
         print(f"[{user_email}] Stored summary for: {subject}")
         print(f"[{user_email}] Finished email save for {subject} in {time.time() - started_at:.1f}s")

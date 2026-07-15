@@ -38,6 +38,7 @@ from security import (
     encrypt_text,
     encryption_is_using_default,
 )
+from local_storage import request as local_storage_request, vector_match as local_vector_match
 
 
 
@@ -393,7 +394,9 @@ def get_supabase_key() -> str:
     ).strip()
 
 def supabase_enabled() -> bool:
-    return bool(get_supabase_url() and get_supabase_key())
+    # Kept as a compatibility name for the existing feature checks. Persistence
+    # is always available through the local SQLite database.
+    return True
 
 
 SUPABASE_ENCRYPTED_FIELDS = {
@@ -467,84 +470,18 @@ def _decrypt_supabase_result(table: str, result):
     return result
 
 def supabase_request(method: str, table: str, query_params=None, body=None, prefer: str = ""):
-    if not supabase_enabled():
-        raise RuntimeError("Supabase not configured")
-    key = get_supabase_key()
-    if key.startswith("sb_publishable_"):
-        raise RuntimeError("Supabase key must be a service_role key for backend read/write.")
-
-    params = query_params or {}
-    qs = urllib.parse.urlencode(params, doseq=True)
-    url = f"{get_supabase_url()}/rest/v1/{table}"
-    if qs:
-        url = f"{url}?{qs}"
-
-    headers = {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-    }
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(_encrypt_supabase_body(table, body), ensure_ascii=False).encode("utf-8")
-    if prefer:
-        headers["Prefer"] = prefer
-
-    req = urllib.request.Request(url=url, data=data, method=method.upper(), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            if not raw.strip():
-                return None
-            try:
-                return _decrypt_supabase_result(table, json.loads(raw))
-            except Exception:
-                return raw
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(f"Supabase {table} {method.upper()} failed: HTTP {e.code} {detail}") from e
+    result = local_storage_request(
+        method,
+        table,
+        query_params=query_params,
+        body=_encrypt_supabase_body(table, body) if body is not None else None,
+        prefer=prefer,
+    )
+    return _decrypt_supabase_result(table, result)
 
 def supabase_rpc(function_name: str, payload: dict):
-    if not supabase_enabled():
-        raise RuntimeError("Supabase not configured")
-    key = get_supabase_key()
-    if key.startswith("sb_publishable_"):
-        raise RuntimeError("Supabase key must be a service_role key for backend read/write.")
-
-    url = f"{get_supabase_url()}/rest/v1/rpc/{function_name}"
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url=url,
-        data=data,
-        method="POST",
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            if not raw.strip():
-                return []
-            try:
-                parsed = json.loads(raw)
-                return _decrypt_supabase_result("email_embeddings", parsed) if isinstance(parsed, list) else []
-            except Exception:
-                return []
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(f"Supabase RPC {function_name} failed: HTTP {e.code} {detail}") from e
+    del function_name
+    return _decrypt_supabase_result("email_embeddings", local_vector_match(payload))
 
 def supabase_vectors_enabled() -> bool:
     flag = str(os.getenv("SUPABASE_VECTOR_ENABLED", "1")).strip().lower()
@@ -1215,7 +1152,7 @@ def ensure_user_registered(user_email: str):
         query_params={"on_conflict": "email"},
         body=[{
             "email": email,
-            "folder_path": "supabase",
+            "folder_path": "local",
             "migrated_at": now_iso,
         }],
         prefer="resolution=merge-duplicates,return=minimal",
@@ -1236,7 +1173,7 @@ def save_user_credentials(user_email: str, creds: Credentials):
         query_params={"on_conflict": "email"},
         body=[{
             "email": email,
-            "folder_path": "supabase",
+            "folder_path": "local",
             "migrated_at": now_iso,
             "google_token_json": token_json,
             "google_token_updated_at": now_iso,
@@ -1767,7 +1704,7 @@ def get_user_credentials(user_email: str):
                 save_user_credentials(user_email, creds)
             return creds
 
-    raise Exception("No Supabase token found for user. Sign in again at /sign.")
+    raise Exception("No locally saved token found for user. Sign in again at /sign.")
 
 
 def get_gmail_service_for_user(user_email: str):
@@ -1813,7 +1750,7 @@ def candidate_user_emails(requested_user: str = "") -> list[str]:
     try:
         out.extend(get_supabase_user_emails())
     except Exception as e:
-        print(f"[users] Could not read Supabase users: {e}")
+        print(f"[users] Could not read local users: {e}")
     seen = set()
     unique = []
     for email in out:
@@ -1836,7 +1773,7 @@ def known_user_emails() -> list[str]:
     try:
         out.extend(get_supabase_user_emails())
     except Exception as e:
-        print(f"[users] Could not read Supabase users: {e}")
+        print(f"[users] Could not read local users: {e}")
     seen = set()
     unique = []
     for email in out:
@@ -2877,7 +2814,7 @@ def extension_print_recent_emails():
         if len(emails) >= limit:
             break
 
-    print(f"\n[{user}] Last {len(emails)} received email(s) from Supabase:")
+    print(f"\n[{user}] Last {len(emails)} received email(s) from local storage:")
     if not emails:
         print("  No received emails found.")
     for idx, email in enumerate(emails, start=1):
@@ -3331,7 +3268,7 @@ def _ask_answer_for_user(user_email: str, question: str, mode: str = "email", em
             backfill_supabase_embeddings_for_user(user_email, max_items=40)
             relevant = get_supabase_relevant_chunks(user_email, question, k=40)
         except Exception as e:
-            print(f"[{user_email}] Supabase vector search failed, falling back to FAISS: {e}")
+            print(f"[{user_email}] Local vector search failed, falling back to FAISS: {e}")
 
     if not relevant:
         index = get_synced_index(user_email, email_chunks)
