@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Condra Email Assistant",
+  "version": "1.0",
+  "description": "Shows Condra notes, summaries, drafts, and email context in Gmail and Outlook.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://condranew2.onrender.com/*",
+    "http://127.0.0.1:5050/*",
+    "http://localhost:5050/*",
+    "http://127.0.0.1:5000/*",
+    "http://localhost:5000/*"
+  ],
+  "action": {
+    "default_title": "Condra"
+  },
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.office.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}

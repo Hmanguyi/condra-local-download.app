@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Condra</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span></span>
+      <div>
+        <strong>Condra</strong>
+        <small>Email context</small>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button id="signin" class="auth-button" type="button">Sign in/up</button>
+      <button id="refresh" class="icon-button" type="button" title="Refresh open email" aria-label="Refresh open email">↻</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="mode-switch" role="tablist" aria-label="Condra tabs">
+        <button id="tab-summary" class="mode-button active" data-mode="summary" role="tab" aria-selected="true" aria-controls="summary-view" type="button">Summary</button>
+        <button id="tab-notes" class="mode-button" data-mode="notes" role="tab" aria-selected="false" aria-controls="notes-view" type="button">Notes</button>
+        <button id="tab-ask" class="mode-button" data-mode="ask" role="tab" aria-selected="false" aria-controls="ask-view" type="button">Ask</button>
+      </div>
+      <p id="status" class="status">Ready.</p>
+    </section>
+
+    <section id="summary-view" class="view" role="tabpanel" aria-labelledby="tab-summary"></section>
+    <section id="notes-view" class="view hidden" role="tabpanel" aria-labelledby="tab-notes">
+      <form id="note-form" class="tool-form">
+        <label>
+          Topic
+          <input id="note-topic" type="text" autocomplete="off">
+        </label>
+        <label>
+          Expected sender
+          <input id="note-expected" type="text" autocomplete="off">
+        </label>
+        <label>
+          What should Condra do?
+          <textarea id="note-ai-action"></textarea>
+        </label>
+        <button id="save-note" type="submit">Save Note</button>
+      </form>
+      <div id="notes-list" class="stack"></div>
+    </section>
+    <section id="ask-view" class="view hidden" role="tabpanel" aria-labelledby="tab-ask">
+      <div class="ask-chat">
+        <div id="answer" class="answer"></div>
+        <div class="ask-composer">
+          <select id="ask-context" aria-label="Ask context">
+            <option value="current_email">Current email</option>
+            <option value="all_email">All email</option>
+            <option value="chat">No email</option>
+          </select>
+          <div class="ask-input-row">
+            <textarea id="question" rows="1" placeholder="Message Condra..."></textarea>
+            <button id="ask" class="send-button" type="button" aria-label="Send">↑</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="server-key-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="server-key-title">
+    <form id="server-key-form" class="modal">
+      <div class="modal-header">
+        <span class="modal-dot"></span>
+        <div>
+          <h2 id="server-key-title">Connect to Condra</h2>
+          <p id="server-key-message">Sign in with Gmail or Microsoft to connect Condra. The server key is only needed as a fallback.</p>
+        </div>
+      </div>
+      <label id="server-key-field" class="modal-field">
+        Server key
+        <input id="server-key-input" type="password" autocomplete="off" spellcheck="false">
+      </label>
+      <button id="microsoft-signin" class="microsoft-button" type="button">Sign in</button>
+      <p class="modal-help">After sign-in opens, finish there, come back to this sidebar, then retry your action.</p>
+      <div class="modal-actions">
+        <button id="server-key-cancel" type="button">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>
