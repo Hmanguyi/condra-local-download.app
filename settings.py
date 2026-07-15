@@ -1,53 +1,50 @@
 """Local settings and API-key storage.
 
-The API key is stored with the Python keyring package, which uses macOS
-Keychain on a normal macOS install. Non-secret preferences, such as the model
-name, are stored in a JSON file under Application Support.
+Preferences and the API key are stored under Application Support. The API key
+file is readable only by the current macOS user, which avoids Keychain prompts
+for downloaded unsigned builds.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-import keyring
-from keyring.errors import KeyringError
-
 
 APP_NAME = "OpenAI Chat Mac"
-KEYRING_SERVICE = "OpenAIChatMac"
-KEYRING_USERNAME = "openai_api_key"
 SETTINGS_DIR = Path.home() / "Library" / "Application Support" / APP_NAME
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
+SECRETS_FILE = SETTINGS_DIR / "secrets.json"
 DEFAULT_MODEL = "gpt-4.1-mini"
 
 
 def load_api_key() -> str:
-    """Load the API key from macOS Keychain if it exists."""
+    """Load the API key from local app storage if it exists."""
 
     try:
-        return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME) or ""
-    except KeyringError:
+        data = json.loads(SECRETS_FILE.read_text(encoding="utf-8"))
+        return str(data.get("openai_api_key") or "")
+    except (OSError, json.JSONDecodeError):
         return ""
 
 
 def save_api_key(api_key: str) -> None:
-    """Save or clear the API key in the system keyring."""
+    """Save or clear the API key in local app storage."""
 
     try:
+        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
         if api_key.strip():
-            keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, api_key.strip())
+            SECRETS_FILE.write_text(
+                json.dumps({"openai_api_key": api_key.strip()}, indent=2),
+                encoding="utf-8",
+            )
+            os.chmod(SECRETS_FILE, 0o600)
         else:
-            try:
-                keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
-            except KeyringError:
-                pass
-    except KeyringError as exc:
-        raise RuntimeError(
-            "Could not save the API key to macOS Keychain. "
-            "Install keyring support or paste the key again when you launch the app."
-        ) from exc
+            SECRETS_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError("Could not save the API key to local app storage.") from exc
 
 
 def load_preferences() -> dict[str, Any]:

@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     char *check_args[] = {
         python_path,
         "-c",
-        "import PySide6, openai, keyring",
+        "import PySide6, openai",
         NULL,
     };
 
