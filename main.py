@@ -94,6 +94,11 @@ class MainWindow(QMainWindow):
         self.loading_timer = QTimer(self)
         self.loading_timer.setInterval(350)
         self.loading_timer.timeout.connect(self.advance_loading_animation)
+        self.typing_text = ""
+        self.typing_index = 0
+        self.typing_timer = QTimer(self)
+        self.typing_timer.setInterval(16)
+        self.typing_timer.timeout.connect(self.advance_typing_animation)
 
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
@@ -101,49 +106,55 @@ class MainWindow(QMainWindow):
         self.chat_area.document().setDefaultStyleSheet(
             """
             body {
-                color: #25231f;
+                color: #14201b;
                 font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-                font-size: 14px;
-                line-height: 1.45;
+                font-size: 13px;
+                line-height: 1.48;
             }
             .message-row {
-                margin: 14px 0;
-            }
-            .speaker {
-                color: #7b746a;
-                font-size: 12px;
-                font-weight: 700;
-                margin-bottom: 5px;
-                text-transform: uppercase;
+                margin: 6px 0;
             }
             .bubble {
-                border-radius: 14px;
-                padding: 11px 13px;
+                border-radius: 8px;
+                padding: 10px 11px;
             }
             .user {
-                background: #dcebdd;
-                border: 1px solid #c1d8c4;
+                color: #ffffff;
+                background: #25704a;
             }
             .assistant {
-                background: #fffdf8;
-                border: 1px solid #ddd6c8;
+                color: #14201b;
+                background: #ffffff;
+                border: 1px solid #dce6e1;
             }
             .system {
-                color: #8a8175;
+                color: #66736d;
+                font-size: 12px;
+                margin: 10px 0;
+            }
+            .empty-title {
+                color: #14201b;
+                font-size: 21px;
+                font-weight: 800;
+                margin-top: 150px;
+                text-align: center;
+            }
+            .empty-copy {
+                color: #66736d;
                 font-size: 13px;
-                margin: 12px 0;
+                text-align: center;
             }
             """
         )
 
         self.input_box = EnterToSendTextEdit()
-        self.input_box.setPlaceholderText("Ask anything...")
-        self.input_box.setFixedHeight(96)
+        self.input_box.setPlaceholderText("Message Condra...")
+        self.input_box.setFixedHeight(58)
         self.input_box.send_requested.connect(self.send_message)
 
-        self.send_button = QPushButton("Send")
+        self.send_button = QPushButton("↑")
         self.send_button.setObjectName("sendButton")
-        self.send_button.setFixedWidth(96)
+        self.send_button.setFixedSize(38, 38)
         self.send_button.clicked.connect(self.send_message)
 
         self.key_input = QLineEdit()
@@ -166,6 +177,7 @@ class MainWindow(QMainWindow):
         clear_button = QPushButton("New Chat")
         clear_button.setObjectName("headerButton")
         clear_button.clicked.connect(self.clear_chat)
+        self.new_chat_button = clear_button
 
         self.stack = QStackedWidget()
         self.stack.setObjectName("root")
@@ -204,7 +216,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(14, 18, 14, 16)
         sidebar_layout.setSpacing(10)
 
-        brand = QLabel("OpenAI Chat")
+        brand = QLabel("●  Condra")
         brand.setObjectName("sidebarBrand")
         sidebar_layout.addWidget(brand)
         clear_button.setObjectName("newChatButton")
@@ -261,6 +273,7 @@ class MainWindow(QMainWindow):
 
         self.loading_frame = QFrame()
         self.loading_frame.setObjectName("loadingFrame")
+        self.loading_frame.setMaximumWidth(155)
         loading_layout = QHBoxLayout(self.loading_frame)
         loading_layout.setContentsMargins(14, 7, 14, 7)
         loading_layout.setSpacing(8)
@@ -276,12 +289,18 @@ class MainWindow(QMainWindow):
 
         composer = QFrame()
         composer.setObjectName("composer")
-        composer_layout = QHBoxLayout(composer)
+        composer_layout = QVBoxLayout(composer)
         composer_layout.setContentsMargins(10, 10, 10, 10)
-        composer_layout.setSpacing(10)
+        composer_layout.setSpacing(7)
 
-        composer_layout.addWidget(self.input_box, 1)
-        composer_layout.addWidget(self.send_button)
+        self.model_context_label = QLabel(self.model_input.text().strip() or DEFAULT_MODEL)
+        self.model_context_label.setObjectName("contextPill")
+        composer_layout.addWidget(self.model_context_label, 0, Qt.AlignLeft)
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+        input_row.addWidget(self.input_box, 1)
+        input_row.addWidget(self.send_button, 0, Qt.AlignBottom)
+        composer_layout.addLayout(input_row)
         app_layout.addWidget(composer)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -422,6 +441,8 @@ class MainWindow(QMainWindow):
                 chat["title"] = self.chat_title(text)
             self.persist_chats()
             self.refresh_chat_list()
+        if len(self.messages) == 1:
+            self.chat_area.clear()
         self.append_message("You", text)
         self.input_box.clear()
         self.set_waiting(True)
@@ -434,12 +455,39 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def handle_response(self, text: str) -> None:
-        self.messages.append(ChatMessage(role="assistant", content=text))
+        self.loading_timer.stop()
+        self.loading_frame.hide()
+        self.typing_text = str(text or "")
+        self.typing_index = 0
+        self.typing_timer.start()
+        self.advance_typing_animation()
+
+    def advance_typing_animation(self) -> None:
+        if not self.typing_text:
+            self.finish_typing_animation()
+            return
+
+        remaining = len(self.typing_text) - self.typing_index
+        chunk_size = 1 if len(self.typing_text) < 500 else 2 if len(self.typing_text) < 1200 else 4
+        self.typing_index = min(len(self.typing_text), self.typing_index + min(chunk_size, remaining))
+        partial = self.typing_text[:self.typing_index]
+        self.render_messages(partial_assistant=partial)
+
+        if self.typing_index >= len(self.typing_text):
+            self.finish_typing_animation()
+
+    def finish_typing_animation(self) -> None:
+        self.typing_timer.stop()
+        completed_text = self.typing_text
+        self.typing_text = ""
+        self.typing_index = 0
+        if completed_text:
+            self.messages.append(ChatMessage(role="assistant", content=completed_text))
         chat = self.active_chat()
         if chat:
             chat["messages"] = self.serialized_messages()
             self.persist_chats()
-        self.append_message("Assistant", text)
+        self.render_active_chat()
         self.set_waiting(False)
 
     def handle_error(self, message: str) -> None:
@@ -455,6 +503,7 @@ class MainWindow(QMainWindow):
         self.send_button.setEnabled(not waiting)
         self.input_box.setEnabled(not waiting)
         self.chat_list.setEnabled(not waiting)
+        self.new_chat_button.setEnabled(not waiting)
         self.loading_frame.setVisible(waiting)
         if waiting:
             self.loading_step = 0
@@ -470,7 +519,7 @@ class MainWindow(QMainWindow):
         dots = "·" * (self.loading_step % 4)
         self.loading_label.setText(f"Thinking {dots}".rstrip())
         self.loading_dot.setStyleSheet(
-            "color: #356fd6;" if self.loading_step % 2 == 0 else "color: #8fb0ec;"
+            "color: #25704a;" if self.loading_step % 2 == 0 else "color: #8fc3a5;"
         )
         self.loading_step += 1
 
@@ -484,6 +533,7 @@ class MainWindow(QMainWindow):
             save_preferences(self.model_input.text())
             save_api_key(self.api_key)
             self.model_subtitle.setText(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
+            self.model_context_label.setText(self.model_input.text().strip() or DEFAULT_MODEL)
             self.append_system_message("Settings saved.")
             if self.api_key:
                 self.show_chat()
@@ -503,6 +553,7 @@ class MainWindow(QMainWindow):
             save_api_key(self.api_key)
             save_preferences(self.model_input.text())
             self.model_subtitle.setText(f"Model: {self.model_input.text().strip() or DEFAULT_MODEL}")
+            self.model_context_label.setText(self.model_input.text().strip() or DEFAULT_MODEL)
             self.show_chat()
         except RuntimeError as exc:
             QMessageBox.warning(self, "OpenAI Chat", str(exc))
@@ -587,13 +638,21 @@ class MainWindow(QMainWindow):
         self.render_active_chat()
 
     def render_active_chat(self) -> None:
+        self.render_messages()
+
+    def render_messages(self, partial_assistant: str = "") -> None:
         self.chat_area.clear()
-        if not self.messages:
-            self.append_system_message("What can I help you with?")
+        if not self.messages and not partial_assistant:
+            self.chat_area.setHtml(
+                "<div class='empty-title'>Ask Condra</div>"
+                "<div class='empty-copy'>Start a conversation. Your chats are saved locally.</div>"
+            )
             return
         for message in self.messages:
             speaker = "You" if message.role == "user" else "Assistant"
             self.append_message(speaker, message.content)
+        if partial_assistant:
+            self.append_message("Assistant", partial_assistant + "▍")
 
     def toggle_sidebar(self) -> None:
         visible = not self.sidebar.isHidden()
@@ -603,11 +662,12 @@ class MainWindow(QMainWindow):
     def append_message(self, speaker: str, text: str) -> None:
         escaped_text = self.escape(text).replace(chr(10), "<br>")
         bubble_class = "user" if speaker == "You" else "assistant"
+        alignment = "right" if speaker == "You" else "left"
+        bubble_width = min(72, max(26, 22 + len(str(text or "")) // 2))
         self.chat_area.append(
-            "<div class='message-row'>"
-            f"<div class='speaker'>{speaker}</div>"
-            f"<div class='bubble {bubble_class}'>{escaped_text}</div>"
-            "</div>"
+            f"<table class='message-row' width='{bubble_width}%' align='{alignment}' cellspacing='0' cellpadding='0'>"
+            f"<tr><td class='bubble {bubble_class}'>{escaped_text}</td></tr>"
+            "</table><br>"
         )
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
 
@@ -632,20 +692,20 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow {
-                background: #f6f7f9;
+                background: #f4f7f6;
             }
             QWidget {
-                color: #20242a;
+                color: #14201b;
                 font-size: 14px;
             }
             QWidget#root {
-                background: #f6f7f9;
+                background: #f4f7f6;
             }
             QWidget#setupPage, QWidget#chatPage, QWidget#settingsPage {
-                background: #f6f7f9;
+                background: #f4f7f6;
             }
             QWidget#conversationPanel {
-                background: #f6f7f9;
+                background: #f4f7f6;
             }
             QFrame#chatSidebar {
                 background: #17191d;
@@ -710,29 +770,47 @@ class MainWindow(QMainWindow):
                 font-size: 13px;
             }
             QTextEdit#chatArea {
-                background: #ffffff;
-                border: 1px solid #e2e5e9;
-                border-radius: 16px;
-                padding: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #f7faf8);
+                border: 1px solid #dce6e1;
+                border-radius: 10px;
+                padding: 14px 12px;
             }
             QFrame#loadingFrame {
-                background: #edf3ff;
-                border: 1px solid #d9e6fb;
-                border-radius: 10px;
+                background: #ffffff;
+                border: 1px solid #dce6e1;
+                border-radius: 8px;
             }
             QLabel#loadingDot {
-                color: #356fd6;
+                color: #25704a;
                 font-size: 10px;
             }
             QLabel#loadingLabel {
-                color: #536174;
+                color: #25704a;
                 font-size: 13px;
-                font-weight: 600;
+                font-weight: 700;
             }
             QFrame#composer {
+                background: rgba(251, 252, 251, 0.96);
+                border: 1px solid #dce6e1;
+                border-radius: 10px;
+            }
+            QFrame#composer QPlainTextEdit {
                 background: #ffffff;
-                border: 1px solid #dfe3e8;
-                border-radius: 14px;
+                border: 1px solid #dce6e1;
+                border-radius: 8px;
+                padding: 8px 9px;
+            }
+            QFrame#composer QPlainTextEdit:focus {
+                border: 1px solid #8bbca0;
+            }
+            QLabel#contextPill {
+                color: #25704a;
+                background: #edf7f1;
+                border: 1px solid #d6eade;
+                border-radius: 10px;
+                padding: 5px 9px;
+                font-size: 11px;
+                font-weight: 700;
             }
             QFrame#settingsCard {
                 background: #ffffff;
@@ -766,18 +844,18 @@ class MainWindow(QMainWindow):
                 selection-background-color: #d9e8ff;
             }
             QLineEdit:focus, QPlainTextEdit:focus {
-                border: 1px solid #356fd6;
+                border: 1px solid #25704a;
             }
             QPushButton {
                 border: none;
                 border-radius: 10px;
                 padding: 10px 13px;
-                background: #356fd6;
+                background: #25704a;
                 color: white;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #2d61bd;
+                background: #1d5f3e;
             }
             QPushButton:disabled {
                 background: #aeb6c2;
@@ -791,8 +869,8 @@ class MainWindow(QMainWindow):
                 border: 1px solid #dfe3e8;
             }
             QPushButton#headerButton:hover {
-                background: #eef2f7;
-                border: 1px solid #ccd3dc;
+                background: #edf7f1;
+                border: 1px solid #bdd8c8;
             }
             QPushButton#newChatButton {
                 background: #ffffff;
@@ -819,6 +897,21 @@ class MainWindow(QMainWindow):
             QPushButton#setupButton {
                 font-size: 15px;
                 padding: 12px 14px;
+            }
+            QPushButton#sendButton {
+                min-width: 38px;
+                max-width: 38px;
+                min-height: 38px;
+                max-height: 38px;
+                border-radius: 19px;
+                padding: 0;
+                background: #25704a;
+                color: #ffffff;
+                font-size: 20px;
+                font-weight: 800;
+            }
+            QPushButton#sendButton:hover {
+                background: #1d5f3e;
             }
             """
         )
